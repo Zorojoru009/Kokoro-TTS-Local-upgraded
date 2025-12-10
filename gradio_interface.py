@@ -84,6 +84,138 @@ DEFAULT_VOICE_PRESETS = {
             "voices": ["am_michael", "am_santa"],
             "weights": [0.8, 0.2],
             "mode": "blend"
+        },
+        # Deep Authority Presets (5-voice blends for maximum gravitas)
+        "ultimate_sage": {
+            "name": "Ultimate Sage",
+            "description": "Maximum depth and wisdom (35% Adam + 25% Michael + 20% Echo + 15% George + 5% Liam)",
+            "voices": ["am_adam", "am_michael", "am_echo", "bm_george", "am_liam"],
+            "weights": [0.35, 0.25, 0.20, 0.15, 0.05],
+            "mode": "blend"
+        },
+        "deep_contemplative": {
+            "name": "Deep Contemplative",
+            "description": "Profound and thoughtful (40% Adam + 30% Michael + 15% Echo + 10% George + 5% Fenrir)",
+            "voices": ["am_adam", "am_michael", "am_echo", "bm_george", "am_fenrir"],
+            "weights": [0.40, 0.30, 0.15, 0.10, 0.05],
+            "mode": "blend"
+        },
+        # Professional Authority Presets (4-voice blends)
+        "professor": {
+            "name": "Professor",
+            "description": "Academic authority (40% Adam + 30% Michael + 20% Echo + 10% George)",
+            "voices": ["am_adam", "am_michael", "am_echo", "bm_george"],
+            "weights": [0.40, 0.30, 0.20, 0.10],
+            "mode": "blend"
+        },
+        "expert_voice": {
+            "name": "Expert Voice",
+            "description": "Clear expertise (40% Adam + 25% Echo + 20% Michael + 15% Fenrir)",
+            "voices": ["am_adam", "am_echo", "am_michael", "am_fenrir"],
+            "weights": [0.40, 0.25, 0.20, 0.15],
+            "mode": "blend"
+        },
+        "scholarly": {
+            "name": "Scholarly",
+            "description": "British scholarly tone (40% George + 30% Adam + 20% Michael + 10% Echo)",
+            "voices": ["bm_george", "am_adam", "am_michael", "am_echo"],
+            "weights": [0.40, 0.30, 0.20, 0.10],
+            "mode": "blend"
+        },
+        # Engaging Educator Presets (3-voice blends)
+        "warm_educator": {
+            "name": "Warm Educator",
+            "description": "Deep + warm teaching voice (45% Adam + 30% Michael + 25% Echo)",
+            "voices": ["am_adam", "am_michael", "am_echo"],
+            "weights": [0.45, 0.30, 0.25],
+            "mode": "blend"
+        },
+        "approachable_expert": {
+            "name": "Approachable Expert",
+            "description": "Authoritative yet accessible (40% Adam + 30% Michael + 30% Liam)",
+            "voices": ["am_adam", "am_michael", "am_liam"],
+            "weights": [0.40, 0.30, 0.30],
+            "mode": "blend"
+        },
+        "mentor": {
+            "name": "Mentor",
+            "description": "Warm mentor voice (45% Michael + 35% Adam + 20% Liam)",
+            "voices": ["am_michael", "am_adam", "am_liam"],
+            "weights": [0.45, 0.35, 0.20],
+            "mode": "blend"
+        },
+        # Intense/Confrontational Presets (3-4 voice blends)
+        "challenger": {
+            "name": "Challenger",
+            "description": "Direct & powerful for confrontations (50% Adam + 30% Fenrir + 20% Michael)",
+            "voices": ["am_adam", "am_fenrir", "am_michael"],
+            "weights": [0.50, 0.30, 0.20],
+            "mode": "blend"
+        },
+        "provocateur": {
+            "name": "Provocateur",
+            "description": "Intense questioning voice (45% Adam + 30% Fenrir + 15% Echo + 10% Michael)",
+            "voices": ["am_adam", "am_fenrir", "am_echo", "am_michael"],
+            "weights": [0.45, 0.30, 0.15, 0.10],
+            "mode": "blend"
+        },
+        "uncompromising": {
+            "name": "Uncompromising",
+            "description": "Hardline authority (55% Adam + 25% Fenrir + 15% Echo + 5% Michael)",
+            "voices": ["am_adam", "am_fenrir", "am_echo", "am_michael"],
+            "weights": [0.55, 0.25, 0.15, 0.05],
+            "mode": "blend"
+        },
+        # Calm/Reflective Presets (3-5 voice blends)
+        "reflective_thinker": {
+            "name": "Reflective Thinker",
+            "description": "Thoughtful calm (40% Michael + 30% Adam + 20% Echo + 10% Liam)",
+            "voices": ["am_michael", "am_adam", "am_echo", "am_liam"],
+            "weights": [0.40, 0.30, 0.20, 0.10],
+            "mode": "blend"
+        },
+        "inner_voice": {
+            "name": "Inner Voice",
+            "description": "Balanced wisdom (35% Michael + 35% Adam + 20% Echo + 10% George)",
+            "voices": ["am_michael", "am_adam", "am_echo", "bm_george"],
+            "weights": [0.35, 0.35, 0.20, 0.10],
+            "mode": "blend"
+        },
+        "philosophical_calm": {
+            "name": "Philosophical Calm",
+            "description": "Soothing authority (35% Michael + 30% Adam + 20% George + 15% Echo)",
+            "voices": ["am_michael", "am_adam", "bm_george", "am_echo"],
+            "weights": [0.35, 0.30, 0.20, 0.15],
+            "mode": "blend"
+        },
+        "contemplative_sage": {
+            "name": "Contemplative Sage",
+            "description": "Deeply reflective (30% Adam + 30% Michael + 20% George + 15% Echo + 5% Liam)",
+            "voices": ["am_adam", "am_michael", "bm_george", "am_echo", "am_liam"],
+            "weights": [0.30, 0.30, 0.20, 0.15, 0.05],
+            "mode": "blend"
+        },
+        # Additional Specialized Presets
+        "storyteller": {
+            "name": "Storyteller",
+            "description": "Narrative voice (40% Michael + 35% Adam + 15% Liam + 10% Echo)",
+            "voices": ["am_michael", "am_adam", "am_liam", "am_echo"],
+            "weights": [0.40, 0.35, 0.15, 0.10],
+            "mode": "blend"
+        },
+        "truth_seeker": {
+            "name": "Truth Seeker",
+            "description": "Questioning spirit (45% Adam + 25% Fenrir + 20% Michael + 10% Echo)",
+            "voices": ["am_adam", "am_fenrir", "am_michael", "am_echo"],
+            "weights": [0.45, 0.25, 0.20, 0.10],
+            "mode": "blend"
+        },
+        "balanced_authority": {
+            "name": "Balanced Authority",
+            "description": "Equal blend of power & wisdom (30% Adam + 30% Michael + 20% Echo + 10% George + 10% Liam)",
+            "voices": ["am_adam", "am_michael", "am_echo", "bm_george", "am_liam"],
+            "weights": [0.30, 0.30, 0.20, 0.10, 0.10],
+            "mode": "blend"
         }
     }
 }
