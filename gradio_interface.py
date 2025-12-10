@@ -759,6 +759,15 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 # Quick preview
                 quick_blend_preview = gr.Markdown("**70% Voice 1 + 30% Voice 2**")
 
+                # Apply blend button
+                apply_blend_btn = gr.Button("✓ Apply Blend", scale=1, variant="primary")
+                blend_status = gr.Textbox(
+                    value="Ready",
+                    interactive=False,
+                    label="Blend Status",
+                    scale=1
+                )
+
             with gr.Column(scale=1):
                 # Speed dial section
                 preset_dropdown = gr.Dropdown(
@@ -989,6 +998,18 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             w2_pct = (w2_val / total) * 100
             return f"**Blend Composition:** {w1_pct:.0f}% {v1_choice} + {w2_pct:.0f}% {v2_choice}"
 
+        # Function to apply blend (sets which blend will be used)
+        def apply_blend_fn(v1, w1, v2, w2):
+            """Apply the selected blend - ready for generation"""
+            total = w1 + w2
+            if total == 0:
+                total = 100
+            w1_pct = (w1 / total) * 100
+            w2_pct = (w2 / total) * 100
+            message = f"✓ Blend Applied: {w1_pct:.0f}% {v1} + {w2_pct:.0f}% {v2} - Ready to Generate!"
+            print(message)
+            return message
+
         # Function to save a custom voice blend preset
         def save_blend_preset_fn(preset_name, preset_desc, v1, w1, v2, w2):
             """Save a custom voice blend as a preset"""
@@ -1031,37 +1052,23 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
         def generate_with_blending(blend_preset_name, text, format, speed, pitch_shift, use_custom,
                                   v1, w1, v2, w2, blend_method):
             """Generate speech using voice blend presets or custom blending with pitch control"""
-            # Check if quick blend sliders are being used (different from default preset voices)
-            # Default preset is "philosopher" which uses am_adam & am_michael
-            use_quick_blend = (v1 != "am_adam" or w1 != 70 or v2 != "am_michael" or w2 != 30)
+            # ALWAYS use the quick blend sliders (v1, w1, v2, w2) from main interface
+            # These are the primary controls for blending
+            custom_voices = [v1, v2]
+            custom_weights = [w1, w2]
 
-            # Use custom blending if either the checkbox is checked OR quick blend sliders differ from defaults
-            if use_custom or use_quick_blend:
-                # Custom voice blending
-                custom_voices = [v1, v2]
-                custom_weights = [w1, w2]
-                print(f"Using custom voice blend: {w1}% {v1} + {w2}% {v2}")
-                return generate_tts_with_logs(
-                    blend_preset_name,
-                    text,
-                    format,
-                    speed,
-                    use_blend=True,
-                    custom_voices=custom_voices,
-                    custom_weights=custom_weights,
-                    pitch_shift=pitch_shift
-                )
-            else:
-                # Use preset blending
-                print(f"Using preset: {blend_preset_name}")
-                return generate_tts_with_logs(
-                    blend_preset_name,
-                    text,
-                    format,
-                    speed,
-                    use_blend=False,
-                    pitch_shift=pitch_shift
-                )
+            print(f"✓ Using quick blend sliders: {w1}% {v1} + {w2}% {v2}")
+
+            return generate_tts_with_logs(
+                blend_preset_name,
+                text,
+                format,
+                speed,
+                use_blend=True,
+                custom_voices=custom_voices,
+                custom_weights=custom_weights,
+                pitch_shift=pitch_shift
+            )
 
         # Connect the buttons to their functions
         load_preset.click(
@@ -1125,6 +1132,13 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             fn=update_blend_preview,
             inputs=[quick_voice1, quick_weight1, quick_voice2, quick_weight2],
             outputs=quick_blend_preview
+        )
+
+        # Apply blend button
+        apply_blend_btn.click(
+            fn=apply_blend_fn,
+            inputs=[quick_voice1, quick_weight1, quick_voice2, quick_weight2],
+            outputs=blend_status
         )
 
         # Save custom voice blend preset
