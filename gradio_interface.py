@@ -1031,10 +1031,16 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
         def generate_with_blending(blend_preset_name, text, format, speed, pitch_shift, use_custom,
                                   v1, w1, v2, w2, blend_method):
             """Generate speech using voice blend presets or custom blending with pitch control"""
-            if use_custom:
+            # Check if quick blend sliders are being used (different from default preset voices)
+            # Default preset is "philosopher" which uses am_adam & am_michael
+            use_quick_blend = (v1 != "am_adam" or w1 != 70 or v2 != "am_michael" or w2 != 30)
+
+            # Use custom blending if either the checkbox is checked OR quick blend sliders differ from defaults
+            if use_custom or use_quick_blend:
                 # Custom voice blending
                 custom_voices = [v1, v2]
                 custom_weights = [w1, w2]
+                print(f"Using custom voice blend: {w1}% {v1} + {w2}% {v2}")
                 return generate_tts_with_logs(
                     blend_preset_name,
                     text,
@@ -1047,6 +1053,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 )
             else:
                 # Use preset blending
+                print(f"Using preset: {blend_preset_name}")
                 return generate_tts_with_logs(
                     blend_preset_name,
                     text,
