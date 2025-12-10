@@ -38,16 +38,9 @@ from models import (
 )
 import speed_dial
 
-# Try to import torchaudio for pitch shifting
-try:
-    import torchaudio
-    TORCHAUDIO_AVAILABLE = True
-except ImportError:
-    TORCHAUDIO_AVAILABLE = False
-    print("Warning: torchaudio not available. Pitch shifting disabled.")
-
 # Constants
-MAX_TEXT_LENGTH = 5000
+MAX_TEXT_LENGTH = 50000  # Increased from 5000 to support long texts with chunking
+CHUNK_SIZE = 2000  # Size of each text chunk for processing
 DEFAULT_SAMPLE_RATE = 24000
 MIN_SPEED = 0.1
 MAX_SPEED = 3.0
@@ -84,6 +77,13 @@ DEFAULT_VOICE_PRESETS = {
             "voices": ["am_adam"],
             "weights": [1.0],
             "mode": "single"
+        },
+        "warm_santa": {
+            "name": "Warm Santa Voice",
+            "description": "Deep warm voice with subtle jolly undertones (80% Michael + 20% Santa)",
+            "voices": ["am_michael", "am_santa"],
+            "weights": [0.8, 0.2],
+            "mode": "blend"
         }
     }
 }
@@ -416,98 +416,76 @@ def blend_voices_slerp(voice_names: List[str], weights: List[float]) -> torch.Te
     print(f"SLERP blended {voice_names[0]} (t={1-t:.2f}) and {voice_names[1]} (t={t:.2f})")
     return result
 
-def apply_pitch_shift(audio_data: torch.Tensor, semitones: float, sample_rate: int = 24000) -> torch.Tensor:
+def split_long_text(text: str, max_chunk_size: int = CHUNK_SIZE) -> List[str]:
     """
-    Apply pitch shifting to audio using phase vocoder method.
+    Split long text into chunks at natural boundaries.
+
+    Attempts to split at sentence boundaries to maintain coherence.
+    Falls back to word boundaries if a sentence is too long.
 
     Args:
-        audio_data: Audio tensor (1D or 2D)
-        semitones: Number of semitones to shift (-12 to +12 recommended)
-                   Negative = lower pitch, Positive = higher pitch
-        sample_rate: Sample rate of audio
+        text: Text to split
+        max_chunk_size: Maximum size of each chunk in characters
 
     Returns:
-        Pitch-shifted audio tensor
+        List of text chunks
     """
-    if not TORCHAUDIO_AVAILABLE:
-        print("Warning: torchaudio not available. Skipping pitch shift.")
-        return audio_data
+    if len(text) <= max_chunk_size:
+        return [text]
 
-    try:
-        if semitones == 0:
-            return audio_data
+    chunks = []
+    current_chunk = ""
 
-        # Ensure audio is the right shape for torchaudio
-        if audio_data.dim() == 1:
-            audio_data = audio_data.unsqueeze(0)
+    # Split by paragraphs first
+    paragraphs = text.split('\n\n')
 
-        # Use phase vocoder for pitch shifting
-        # Convert semitones to frequency ratio
-        pitch_shift_ratio = 2.0 ** (semitones / 12.0)
+    for paragraph in paragraphs:
+        # Split paragraph by sentences (. ! ?)
+        sentences = []
+        current_sentence = ""
 
-        # Apply pitch shift using phase vocoder
-        shifted_audio = torchaudio.functional.pitch_shift(
-            audio_data,
-            sample_rate,
-            n_steps=semitones
-        )
+        for char in paragraph:
+            current_sentence += char
+            if char in '.!?':
+                sentences.append(current_sentence.strip())
+                current_sentence = ""
 
-        # Remove batch dimension if input was 1D
-        if shifted_audio.shape[0] == 1:
-            shifted_audio = shifted_audio.squeeze(0)
+        if current_sentence.strip():
+            sentences.append(current_sentence.strip())
 
-        print(f"Applied pitch shift: {semitones:+.1f} semitones")
-        return shifted_audio
+        # Add sentences to current chunk
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) + 1 <= max_chunk_size:
+                current_chunk += " " + sentence if current_chunk else sentence
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = sentence
 
-    except Exception as e:
-        print(f"Warning: Pitch shifting failed ({e}). Using original audio.")
-        return audio_data
+        # Add paragraph break
+        if current_chunk:
+            current_chunk += "\n"
 
-def lower_pitch_semitones(audio_data: torch.Tensor, semitones: int = -6, sample_rate: int = 24000) -> torch.Tensor:
-    """
-    Lower the pitch of audio by a specified number of semitones.
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
 
-    Args:
-        audio_data: Audio tensor
-        semitones: Number of semitones to lower (e.g., -6 = one octave lower, -12 = two octaves)
-        sample_rate: Sample rate
-
-    Returns:
-        Lower-pitched audio
-    """
-    return apply_pitch_shift(audio_data, semitones, sample_rate)
-
-def lower_pitch_percent(audio_data: torch.Tensor, percent_lower: float = 20, sample_rate: int = 24000) -> torch.Tensor:
-    """
-    Lower pitch by a percentage amount.
-
-    Args:
-        audio_data: Audio tensor
-        percent_lower: How much lower (0-100, typically 10-30 for subtle effect)
-        sample_rate: Sample rate
-
-    Returns:
-        Lower-pitched audio
-    """
-    # Convert percentage to semitones (roughly)
-    # 20% ≈ -4 to -5 semitones
-    semitones = -(percent_lower / 5)  # Approximate conversion
-    return apply_pitch_shift(audio_data, semitones, sample_rate)
+    return chunks if chunks else [text]
 
 def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: float = 1.0,
                           use_blend: bool = False, custom_voices: Optional[List[str]] = None,
-                          custom_weights: Optional[List[float]] = None, pitch_shift: int = 0) -> Optional[PathLike]:
-    """Generate TTS audio with progress logging, memory management, voice blending, and pitch control.
+                          custom_weights: Optional[List[float]] = None) -> Optional[PathLike]:
+    """Generate TTS audio with progress logging, memory management, and voice blending.
+
+    Handles long texts (up to 50,000 characters) by splitting into chunks and processing sequentially.
 
     Args:
         voice_selection: Name of the voice preset or single voice to use
-        text: Text to convert to speech
+        text: Text to convert to speech (up to 50,000 characters)
         format: Output format ('wav', 'mp3', 'aac')
         speed: Speech speed multiplier
         use_blend: Whether to use voice blending
         custom_voices: List of voices for custom blending
         custom_weights: Weights for custom voice blending
-        pitch_shift: Pitch shift in semitones (-12 to +12, 0 = no shift)
 
     Returns:
         Path to generated audio file or None on error
@@ -646,11 +624,6 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
                 final_audio = torch.cat(all_audio, dim=0)
             except RuntimeError as e:
                 raise Exception(f"Failed to concatenate audio segments: {e}")
-
-        # Apply pitch shifting if requested
-        if pitch_shift != 0:
-            print(f"Applying pitch shift: {pitch_shift:+d} semitones")
-            final_audio = apply_pitch_shift(final_audio, pitch_shift, SAMPLE_RATE)
 
         # Save audio file
         try:
@@ -890,16 +863,6 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                         label="Speed"
                     )
 
-                with gr.Row():
-                    pitch = gr.Slider(
-                        minimum=-12,
-                        maximum=12,
-                        value=0,
-                        step=1,
-                        label="Pitch Shift (semitones)",
-                        info="Negative = deeper, Positive = higher"
-                    )
-
             with gr.Column(scale=1):
                 load_preset = gr.Button("Load")
                 save_preset = gr.Button("Save Current")
@@ -1049,9 +1012,9 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 return f"❌ {message}"
 
         # Function to generate speech with voice blending
-        def generate_with_blending(blend_preset_name, text, format, speed, pitch_shift, use_custom,
+        def generate_with_blending(blend_preset_name, text, format, speed,
                                   v1, w1, v2, w2, blend_method):
-            """Generate speech using voice blend presets or custom blending with pitch control"""
+            """Generate speech using voice blend from quick controls"""
             # ALWAYS use the quick blend sliders (v1, w1, v2, w2) from main interface
             # These are the primary controls for blending
             custom_voices = [v1, v2]
@@ -1066,8 +1029,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 speed,
                 use_blend=True,
                 custom_voices=custom_voices,
-                custom_weights=custom_weights,
-                pitch_shift=pitch_shift
+                custom_weights=custom_weights
             )
 
         # Connect the buttons to their functions
@@ -1155,11 +1117,10 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             outputs=delete_status
         )
 
-        # Connect the generate button with voice blending and pitch control support
-        # Use quick blend controls if they're different from defaults, otherwise use advanced controls
+        # Connect the generate button with voice blending support
         generate.click(
             fn=generate_with_blending,
-            inputs=[blend_preset, text, format, speed, pitch, use_custom_blend,
+            inputs=[blend_preset, text, format, speed,
                    quick_voice1, quick_weight1, quick_voice2, quick_weight2, blend_method],
             outputs=output
         )
