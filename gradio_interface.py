@@ -441,7 +441,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
     interface.launch(
         server_name=server_name,
         server_port=server_port,
-        share=False
+        share=True
     )
 
 def cleanup_resources():
