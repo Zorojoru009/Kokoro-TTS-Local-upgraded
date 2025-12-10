@@ -656,9 +656,21 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
             MAX_CHARS = min(MAX_CHARS, 2000)  # Reduce limit for low memory
             print(f"Reduced text limit to {MAX_CHARS} characters due to low memory")
 
-        if len(text) > MAX_CHARS:
-            print(f"Warning: Text exceeds {MAX_CHARS} characters. Truncating to prevent memory issues.")
-            text = text[:MAX_CHARS] + "..."
+        # Check if text needs chunking
+        text_length = len(text)
+        needs_chunking = text_length > CHUNK_SIZE
+
+        if needs_chunking:
+            chunks = split_long_text(text, CHUNK_SIZE)
+            print(f"\n{'='*60}")
+            print(f"📊 TEXT PROCESSING")
+            print(f"{'='*60}")
+            print(f"Total characters: {text_length:,}")
+            print(f"Chunk size: {CHUNK_SIZE:,} chars")
+            print(f"Number of chunks: {len(chunks)}")
+            print(f"{'='*60}\n")
+        else:
+            chunks = [text]
 
         # Generate base filename from text
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -666,7 +678,10 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
         wav_path = DEFAULT_OUTPUT_DIR / f"{base_name}.wav"
 
         # Generate speech
-        print(f"\nGenerating speech for: '{text}'")
+        print(f"\n{'='*60}")
+        print(f"🎙️  GENERATION STARTED")
+        print(f"{'='*60}")
+        print(f"Text length: {text_length:,} characters")
         print(f"Speed: {speed}x")
 
         # Handle voice blending
@@ -710,6 +725,7 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
             raise FileNotFoundError(f"Voice file not found: {voice_path}")
 
         print(f"Voice: {blend_description}")
+        print(f"{'='*60}\n")
 
         try:
             # Determine language from voice path or use voice_selection for presets
@@ -717,30 +733,49 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
 
             if voice_prefix.startswith(tuple(LANG_MAP.keys())):
                 pipeline = get_pipeline_for_voice(voice_prefix)
-                generator = pipeline(text, voice=voice_path, speed=speed, split_pattern=r'\n+')
             else:
-                generator = model(text, voice=voice_path, speed=speed, split_pattern=r'\n+')
+                pipeline = None
 
             all_audio = []
-            max_segments = 100  # Safety limit for very long texts
-            segment_count = 0
+            total_segments = 0
 
-            for gs, ps, audio in generator:
-                segment_count += 1
-                if segment_count > max_segments:
-                    print(f"Warning: Reached maximum segment limit ({max_segments})")
-                    break
+            # Process each chunk
+            for chunk_idx, chunk_text in enumerate(chunks, 1):
+                if needs_chunking:
+                    print(f"📍 Processing chunk {chunk_idx}/{len(chunks)} ({len(chunk_text):,} chars)")
 
-                if audio is not None:
-                    if isinstance(audio, np.ndarray):
-                        audio = torch.from_numpy(audio).float()
-                    all_audio.append(audio)
-                    print(f"Generated segment: {gs}")
-                    if ps:  # Only print phonemes if available
-                        print(f"Phonemes: {ps}")
+                try:
+                    if pipeline:
+                        generator = pipeline(chunk_text, voice=voice_path, speed=speed, split_pattern=r'\n+')
+                    else:
+                        generator = model(chunk_text, voice=voice_path, speed=speed, split_pattern=r'\n+')
+
+                    chunk_segments = 0
+                    for gs, ps, audio in generator:
+                        if audio is not None:
+                            if isinstance(audio, np.ndarray):
+                                audio = torch.from_numpy(audio).float()
+                            all_audio.append(audio)
+                            chunk_segments += 1
+                            total_segments += 1
+
+                    if needs_chunking:
+                        print(f"  ✓ Generated {chunk_segments} segments from chunk {chunk_idx}")
+
+                except Exception as e:
+                    raise Exception(f"Error processing chunk {chunk_idx}: {e}")
+
+                # Clear memory after each chunk
+                if needs_chunking:
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
             if not all_audio:
-                raise Exception("No audio generated")
+                raise Exception("No audio generated from any chunks")
+
+            print(f"\n✓ Total segments generated: {total_segments}")
+
         except Exception as e:
             raise Exception(f"Error in speech generation: {e}")
 
