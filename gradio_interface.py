@@ -30,6 +30,7 @@ from pydub import AudioSegment
 import torch
 import numpy as np
 import argparse
+import json
 from typing import Union, List, Optional, Tuple, Dict, Any
 from models import (
     list_available_voices, build_model,
@@ -43,6 +44,41 @@ DEFAULT_SAMPLE_RATE = 24000
 MIN_SPEED = 0.1
 MAX_SPEED = 3.0
 DEFAULT_SPEED = 1.0
+VOICE_PRESETS_FILE = Path("voice_presets.json")
+
+# Voice blending presets for authoritative content
+DEFAULT_VOICE_PRESETS = {
+    "presets": {
+        "philosopher": {
+            "name": "Philosopher's Voice",
+            "description": "Deep, contemplative voice perfect for philosophical discourse",
+            "voices": ["am_adam", "am_michael"],
+            "weights": [0.7, 0.3],
+            "mode": "blend"
+        },
+        "educator": {
+            "name": "Educator's Voice",
+            "description": "Clear, powerful voice for educational and scientific content",
+            "voices": ["am_adam", "am_echo"],
+            "weights": [0.6, 0.4],
+            "mode": "blend"
+        },
+        "authority": {
+            "name": "Transatlantic Authority",
+            "description": "Blend of American confidence and British reliability",
+            "voices": ["am_adam", "bm_george"],
+            "weights": [0.5, 0.5],
+            "mode": "blend"
+        },
+        "pure_deep": {
+            "name": "Pure Deep Voice",
+            "description": "Single voice maximum gravitas (100% Adam)",
+            "voices": ["am_adam"],
+            "weights": [1.0],
+            "mode": "single"
+        }
+    }
+}
 
 # Define path type for consistent handling
 PathLike = Union[str, Path]
@@ -163,13 +199,134 @@ def convert_audio(input_path: PathLike, output_path: PathLike, format: str) -> O
         traceback.print_exc()
         return None
 
-def generate_tts_with_logs(voice_name: str, text: str, format: str, speed: float = 1.0) -> Optional[PathLike]:
-    """Generate TTS audio with progress logging and memory management.
+def load_voice_presets() -> Dict[str, Any]:
+    """Load voice presets from file or use defaults"""
+    if VOICE_PRESETS_FILE.exists():
+        try:
+            with open(VOICE_PRESETS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Error loading voice presets: {e}. Using defaults.")
+            return DEFAULT_VOICE_PRESETS
+    return DEFAULT_VOICE_PRESETS
+
+def save_voice_presets(presets: Dict[str, Any]):
+    """Save voice presets to file"""
+    try:
+        with open(VOICE_PRESETS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(presets, f, indent=2, ensure_ascii=False)
+        print(f"Voice presets saved to {VOICE_PRESETS_FILE}")
+    except IOError as e:
+        print(f"Error saving voice presets: {e}")
+
+def blend_voices(voice_names: List[str], weights: List[float]) -> torch.Tensor:
+    """
+    Blend multiple voices using weighted averaging.
 
     Args:
-        voice_name: Name of the voice to use
+        voice_names: List of voice file names (without .pt extension)
+        weights: List of weights for each voice (should sum to 1.0)
+
+    Returns:
+        Blended voice tensor
+    """
+    if not voice_names or not weights:
+        raise ValueError("Voice names and weights cannot be empty")
+
+    if len(voice_names) != len(weights):
+        raise ValueError("Number of voices must match number of weights")
+
+    # Normalize weights to sum to 1.0
+    weights = [w / sum(weights) for w in weights]
+
+    voices_dir = Path("voices").resolve()
+    blended_voice = None
+
+    for voice_name, weight in zip(voice_names, weights):
+        voice_path = voices_dir / f"{voice_name}.pt"
+
+        if not voice_path.exists():
+            raise FileNotFoundError(f"Voice file not found: {voice_path}")
+
+        try:
+            voice_data = torch.load(voice_path, weights_only=True)
+
+            if blended_voice is None:
+                blended_voice = weight * voice_data
+            else:
+                blended_voice = blended_voice + (weight * voice_data)
+
+            print(f"Loaded {voice_name}: weight={weight:.2f}")
+        except Exception as e:
+            raise Exception(f"Error loading voice {voice_name}: {e}")
+
+    print(f"Successfully blended {len(voice_names)} voices")
+    return blended_voice
+
+def blend_voices_slerp(voice_names: List[str], weights: List[float]) -> torch.Tensor:
+    """
+    Blend voices using Spherical Linear Interpolation (SLERP) for smoother transitions.
+    Only works with 2 voices for interpolation. For more, uses weighted average.
+
+    Args:
+        voice_names: List of voice file names
+        weights: List of blend weights
+
+    Returns:
+        Blended voice tensor
+    """
+    if len(voice_names) != 2 or len(weights) != 2:
+        print("SLERP requires exactly 2 voices. Falling back to linear blend.")
+        return blend_voices(voice_names, weights)
+
+    voices_dir = Path("voices").resolve()
+
+    # Load voices
+    v1_path = voices_dir / f"{voice_names[0]}.pt"
+    v2_path = voices_dir / f"{voice_names[1]}.pt"
+
+    if not v1_path.exists() or not v2_path.exists():
+        raise FileNotFoundError("One or both voice files not found")
+
+    v1 = torch.load(v1_path, weights_only=True)
+    v2 = torch.load(v2_path, weights_only=True)
+
+    # Normalize weights
+    t = weights[1] / sum(weights)
+
+    # Normalize vectors
+    v1_norm = torch.nn.functional.normalize(v1.unsqueeze(0), dim=1).squeeze(0)
+    v2_norm = torch.nn.functional.normalize(v2.unsqueeze(0), dim=1).squeeze(0)
+
+    # Compute angle between vectors
+    dot_product = torch.clamp((v1_norm * v2_norm).sum(), -1.0, 1.0)
+    theta = torch.acos(dot_product)
+
+    # Spherical linear interpolation
+    if torch.sin(theta) > 1e-6:
+        w1 = torch.sin((1 - t) * theta) / torch.sin(theta)
+        w2 = torch.sin(t * theta) / torch.sin(theta)
+        result = w1 * v1_norm + w2 * v2_norm
+    else:
+        # Fallback to linear blend if vectors are nearly parallel
+        result = (1 - t) * v1_norm + t * v2_norm
+
+    print(f"SLERP blended {voice_names[0]} (t={1-t:.2f}) and {voice_names[1]} (t={t:.2f})")
+    return result
+
+def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: float = 1.0,
+                          use_blend: bool = False, custom_voices: Optional[List[str]] = None,
+                          custom_weights: Optional[List[float]] = None) -> Optional[PathLike]:
+    """Generate TTS audio with progress logging, memory management, and voice blending support.
+
+    Args:
+        voice_selection: Name of the voice preset or single voice to use
         text: Text to convert to speech
         format: Output format ('wav', 'mp3', 'aac')
+        speed: Speech speed multiplier
+        use_blend: Whether to use voice blending
+        custom_voices: List of voices for custom blending
+        custom_weights: Weights for custom voice blending
 
     Returns:
         Path to generated audio file or None on error
@@ -182,7 +339,7 @@ def generate_tts_with_logs(voice_name: str, text: str, format: str, speed: float
         # Check available memory before processing
         memory = psutil.virtual_memory()
         available_gb = memory.available / (1024**3)
-        
+
         if available_gb < 1.0:  # Less than 1GB available
             print(f"Warning: Low memory available ({available_gb:.1f}GB). Consider closing other applications.")
             # Force garbage collection
@@ -207,7 +364,7 @@ def generate_tts_with_logs(voice_name: str, text: str, format: str, speed: float
         if available_gb < 2.0:  # Less than 2GB available
             MAX_CHARS = min(MAX_CHARS, 2000)  # Reduce limit for low memory
             print(f"Reduced text limit to {MAX_CHARS} characters due to low memory")
-        
+
         if len(text) > MAX_CHARS:
             print(f"Warning: Text exceeds {MAX_CHARS} characters. Truncating to prevent memory issues.")
             text = text[:MAX_CHARS] + "..."
@@ -219,16 +376,56 @@ def generate_tts_with_logs(voice_name: str, text: str, format: str, speed: float
 
         # Generate speech
         print(f"\nGenerating speech for: '{text}'")
-        print(f"Using voice: {voice_name}")
+        print(f"Speed: {speed}x")
 
-        # Validate voice path using Path for consistent handling
-        voice_path = Path("voices").resolve() / f"{voice_name}.pt"
+        # Handle voice blending
+        voice_path = None
+        blend_description = ""
+
+        if use_blend and custom_voices and custom_weights:
+            # Custom voice blending
+            print(f"Using custom voice blend: {custom_voices} with weights {custom_weights}")
+            blended_voice = blend_voices(custom_voices, custom_weights)
+            # Save blended voice temporarily
+            blend_voice_path = Path("voices").resolve() / "__blend_temp.pt"
+            torch.save(blended_voice, blend_voice_path)
+            voice_path = blend_voice_path
+            blend_description = f"Custom blend ({', '.join(custom_voices)})"
+        else:
+            # Check if voice_selection is a preset
+            presets = load_voice_presets()
+            if voice_selection in presets.get("presets", {}):
+                preset = presets["presets"][voice_selection]
+                print(f"Using voice preset: {preset['name']}")
+                print(f"Description: {preset['description']}")
+
+                if preset.get("mode") == "blend":
+                    blended_voice = blend_voices(preset["voices"], preset["weights"])
+                    # Save blended voice temporarily
+                    blend_voice_path = Path("voices").resolve() / "__blend_temp.pt"
+                    torch.save(blended_voice, blend_voice_path)
+                    voice_path = blend_voice_path
+                    blend_description = preset["name"]
+                else:
+                    # Single voice from preset
+                    voice_path = Path("voices").resolve() / f"{preset['voices'][0]}.pt"
+                    blend_description = preset["name"]
+            else:
+                # Regular voice selection
+                voice_path = Path("voices").resolve() / f"{voice_selection}.pt"
+                blend_description = voice_selection
+
         if not voice_path.exists():
             raise FileNotFoundError(f"Voice file not found: {voice_path}")
 
+        print(f"Voice: {blend_description}")
+
         try:
-            if voice_name.startswith(tuple(LANG_MAP.keys())):
-                pipeline = get_pipeline_for_voice(voice_name)
+            # Determine language from voice path or use voice_selection for presets
+            voice_prefix = voice_selection[:3].lower() if voice_selection else "am_"
+
+            if voice_prefix.startswith(tuple(LANG_MAP.keys())):
+                pipeline = get_pipeline_for_voice(voice_prefix)
                 generator = pipeline(text, voice=voice_path, speed=speed, split_pattern=r'\n+')
             else:
                 generator = model(text, voice=voice_path, speed=speed, split_pattern=r'\n+')
@@ -300,34 +497,47 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
     # Get speed dial presets
     preset_names = speed_dial.get_preset_names()
 
+    # Load voice blend presets
+    voice_presets = load_voice_presets()
+    preset_keys = list(voice_presets.get("presets", {}).keys())
+    preset_descriptions = {k: v.get("name", k) for k, v in voice_presets.get("presets", {}).items()}
+
     # Create interface
-    with gr.Blocks(title="Kokoro TTS Generator", fill_height=True) as interface:
-        gr.Markdown("# Kokoro TTS Generator")
+    with gr.Blocks(title="Kokoro TTS Generator - With Voice Blending", fill_height=True) as interface:
+        gr.Markdown("# 🎙️ Kokoro TTS Generator with Voice Blending")
+        gr.Markdown("Generate high-quality speech with customizable voice blending for authoritative, educational, and philosophical content.")
 
         with gr.Row():
             with gr.Column(scale=2):
                 gr.Markdown("## TTS Controls")
-            
+
+            with gr.Column(scale=1):
+                gr.Markdown("## Voice Blend Presets")
+
             with gr.Column(scale=1):
                 gr.Markdown("## Speed Dial")
-                
+
         with gr.Row(equal_height=True):
             with gr.Column(scale=2):
                 # Main TTS controls
-                
-                voice = gr.Dropdown(
-                    choices=voices,
-                    value=voices[0] if voices else None,
-                    label="Voice"
-                )
                 text = gr.Textbox(
-                    lines=3,
+                    lines=4,
                     placeholder="Enter text to convert to speech...",
                     label="Text"
                 )
 
             with gr.Column(scale=1):
-            # Speed dial section
+                # Voice blend preset section
+                blend_preset = gr.Dropdown(
+                    choices=preset_keys,
+                    value=preset_keys[0] if preset_keys else None,
+                    label="Voice Blend Preset",
+                    interactive=True
+                )
+                blend_info = gr.Markdown("### Philosopher's Voice\nDeep, contemplative voice perfect for philosophical discourse")
+
+            with gr.Column(scale=1):
+                # Speed dial section
                 preset_dropdown = gr.Dropdown(
                     choices=preset_names,
                     value=preset_names[0] if preset_names else None,
@@ -339,6 +549,50 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                     label="New Preset Name"
                 )
 
+        # Voice Blending Options (Advanced)
+        with gr.Accordion("Advanced - Custom Voice Blending", open=False):
+            gr.Markdown("**Create custom voice blends by selecting multiple voices and adjusting their weights**")
+
+            with gr.Row():
+                voice1 = gr.Dropdown(
+                    choices=voices,
+                    value="am_adam",
+                    label="Voice 1"
+                )
+                weight1 = gr.Slider(
+                    minimum=0,
+                    maximum=100,
+                    value=70,
+                    step=5,
+                    label="Voice 1 Weight (%)"
+                )
+
+            with gr.Row():
+                voice2 = gr.Dropdown(
+                    choices=voices,
+                    value="am_michael",
+                    label="Voice 2"
+                )
+                weight2 = gr.Slider(
+                    minimum=0,
+                    maximum=100,
+                    value=30,
+                    step=5,
+                    label="Voice 2 Weight (%)"
+                )
+
+            with gr.Row():
+                blend_method = gr.Radio(
+                    choices=["Linear Blend", "Spherical Interpolation (SLERP)"],
+                    value="Linear Blend",
+                    label="Blending Method"
+                )
+                use_custom_blend = gr.Checkbox(
+                    value=False,
+                    label="Use Custom Blend"
+                )
+
+        # Additional options
         with gr.Row(equal_height=True):
             with gr.Column(scale=2):
                 with gr.Row():
@@ -361,7 +615,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
 
         with gr.Row():
             with gr.Column(scale=2):
-                generate = gr.Button("Generate Speech")
+                generate = gr.Button("Generate Speech", size="lg", variant="primary")
 
             with gr.Column(scale=1):
                 delete_preset = gr.Button("Delete")
@@ -370,7 +624,25 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             # Output section
             output = gr.Audio(label="Generated Audio")
 
-        # Function to load a preset
+        # Blend preset info updater
+        def update_blend_info(preset_key):
+            if preset_key in voice_presets.get("presets", {}):
+                preset_data = voice_presets["presets"][preset_key]
+                name = preset_data.get("name", preset_key)
+                description = preset_data.get("description", "")
+                voices_list = ", ".join(preset_data.get("voices", []))
+                weights_list = preset_data.get("weights", [])
+                weights_str = ", ".join([f"{w*100:.0f}%" for w in weights_list])
+                return f"### {name}\n{description}\n\n**Composition:** {voices_list}\n**Weights:** {weights_str}"
+            return "Select a preset"
+
+        blend_preset.change(
+            fn=update_blend_info,
+            inputs=blend_preset,
+            outputs=blend_info
+        )
+
+        # Function to load a speed dial preset
         def load_preset_fn(preset_name):
             if not preset_name:
                 return None, None, None, None
@@ -379,14 +651,28 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             if not preset:
                 return None, None, None, None
 
-            return preset["voice"], preset["text"], preset["format"], preset["speed"]
+            # Return: blend_preset, text, format, speed
+            # Use voice blend preset if it matches, otherwise use default
+            blend_key = None
+            for key, preset_data in voice_presets.get("presets", {}).items():
+                if preset_data.get("name") == preset.get("voice"):
+                    blend_key = key
+                    break
 
-        # Function to save a preset
-        def save_preset_fn(name, voice, text, format, speed):
-            if not name or not voice or not text:
-                return gr.update(value="Please provide a name, voice, and text")
+            return blend_key or preset_keys[0], preset["text"], preset["format"], preset["speed"]
 
-            success = speed_dial.save_preset(name, voice, text, format, speed)
+        # Function to save a speed dial preset
+        def save_preset_fn(name, blend_preset_name, text, format, speed):
+            if not name or not blend_preset_name or not text:
+                return gr.update(value="Please provide a name, voice preset, and text")
+
+            # Get the preset name/description for saving
+            if blend_preset_name in voice_presets.get("presets", {}):
+                voice_name = voice_presets["presets"][blend_preset_name].get("name", blend_preset_name)
+            else:
+                voice_name = blend_preset_name
+
+            success = speed_dial.save_preset(name, voice_name, text, format, speed)
 
             # Update the dropdown with the new preset list
             preset_names = speed_dial.get_preset_names()
@@ -396,7 +682,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             else:
                 return gr.update(choices=preset_names)
 
-        # Function to delete a preset
+        # Function to delete a speed dial preset
         def delete_preset_fn(name):
             if not name:
                 return gr.update(value="Please select a preset to delete")
@@ -411,16 +697,43 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             else:
                 return gr.update(choices=preset_names)
 
+        # Function to generate speech with voice blending
+        def generate_with_blending(blend_preset_name, text, format, speed, use_custom,
+                                  v1, w1, v2, w2, blend_method):
+            """Generate speech using voice blend presets or custom blending"""
+            if use_custom:
+                # Custom voice blending
+                custom_voices = [v1, v2]
+                custom_weights = [w1, w2]
+                return generate_tts_with_logs(
+                    blend_preset_name,
+                    text,
+                    format,
+                    speed,
+                    use_blend=True,
+                    custom_voices=custom_voices,
+                    custom_weights=custom_weights
+                )
+            else:
+                # Use preset blending
+                return generate_tts_with_logs(
+                    blend_preset_name,
+                    text,
+                    format,
+                    speed,
+                    use_blend=False
+                )
+
         # Connect the buttons to their functions
         load_preset.click(
             fn=load_preset_fn,
             inputs=preset_dropdown,
-            outputs=[voice, text, format, speed]
+            outputs=[blend_preset, text, format, speed]
         )
 
         save_preset.click(
             fn=save_preset_fn,
-            inputs=[preset_name, voice, text, format, speed],
+            inputs=[preset_name, blend_preset, text, format, speed],
             outputs=preset_dropdown
         )
 
@@ -430,10 +743,11 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             outputs=preset_dropdown
         )
 
-        # Connect the generate button
+        # Connect the generate button with voice blending support
         generate.click(
-            fn=generate_tts_with_logs,
-            inputs=[voice, text, format, speed],
+            fn=generate_with_blending,
+            inputs=[blend_preset, text, format, speed, use_custom_blend,
+                   voice1, weight1, voice2, weight2, blend_method],
             outputs=output
         )
 
