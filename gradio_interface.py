@@ -38,6 +38,14 @@ from models import (
 )
 import speed_dial
 
+# Try to import torchaudio for pitch shifting
+try:
+    import torchaudio
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+    print("Warning: torchaudio not available. Pitch shifting disabled.")
+
 # Constants
 MAX_TEXT_LENGTH = 5000
 DEFAULT_SAMPLE_RATE = 24000
@@ -219,6 +227,100 @@ def save_voice_presets(presets: Dict[str, Any]):
     except IOError as e:
         print(f"Error saving voice presets: {e}")
 
+def create_voice_blend_preset(preset_name: str, preset_description: str, voices: List[str],
+                              weights: List[float], blend_method: str = "linear") -> Tuple[bool, str]:
+    """
+    Create and save a custom voice blend preset.
+
+    Args:
+        preset_name: Name for the preset (e.g., "my_deep_voice")
+        preset_description: Description of the blend
+        voices: List of voice names (e.g., ["am_adam", "am_michael"])
+        weights: List of weights for each voice (should sum to ~100)
+        blend_method: "linear" or "slerp"
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        # Validate inputs
+        if not preset_name or not preset_name.strip():
+            return False, "Preset name cannot be empty"
+
+        if not voices or len(voices) == 0:
+            return False, "At least one voice must be selected"
+
+        if len(voices) != len(weights):
+            return False, "Number of voices must match number of weights"
+
+        if not all(w > 0 for w in weights):
+            return False, "All weights must be greater than 0"
+
+        # Normalize weights
+        total_weight = sum(weights)
+        normalized_weights = [w / total_weight for w in weights]
+
+        # Load existing presets
+        presets = load_voice_presets()
+
+        # Check if preset already exists
+        if preset_name in presets.get("presets", {}):
+            return False, f"Preset '{preset_name}' already exists. Use a different name."
+
+        # Create preset entry
+        new_preset = {
+            "name": preset_name.replace("_", " ").title(),
+            "description": preset_description,
+            "voices": voices,
+            "weights": normalized_weights,
+            "mode": "blend",
+            "blend_method": blend_method,
+            "created": datetime.now().isoformat()
+        }
+
+        # Add to presets
+        if "presets" not in presets:
+            presets["presets"] = {}
+
+        presets["presets"][preset_name] = new_preset
+
+        # Save presets
+        save_voice_presets(presets)
+
+        return True, f"Preset '{new_preset['name']}' created successfully!"
+
+    except Exception as e:
+        return False, f"Error creating preset: {str(e)}"
+
+def delete_voice_blend_preset(preset_name: str) -> Tuple[bool, str]:
+    """
+    Delete a voice blend preset.
+
+    Args:
+        preset_name: Name of the preset to delete
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        presets = load_voice_presets()
+
+        if preset_name not in presets.get("presets", {}):
+            return False, f"Preset '{preset_name}' not found"
+
+        # Check if it's a built-in preset
+        built_in = ["philosopher", "educator", "authority", "pure_deep"]
+        if preset_name in built_in:
+            return False, f"Cannot delete built-in preset '{preset_name}'"
+
+        del presets["presets"][preset_name]
+        save_voice_presets(presets)
+
+        return True, f"Preset '{preset_name}' deleted successfully!"
+
+    except Exception as e:
+        return False, f"Error deleting preset: {str(e)}"
+
 def blend_voices(voice_names: List[str], weights: List[float]) -> torch.Tensor:
     """
     Blend multiple voices using weighted averaging.
@@ -314,10 +416,88 @@ def blend_voices_slerp(voice_names: List[str], weights: List[float]) -> torch.Te
     print(f"SLERP blended {voice_names[0]} (t={1-t:.2f}) and {voice_names[1]} (t={t:.2f})")
     return result
 
+def apply_pitch_shift(audio_data: torch.Tensor, semitones: float, sample_rate: int = 24000) -> torch.Tensor:
+    """
+    Apply pitch shifting to audio using phase vocoder method.
+
+    Args:
+        audio_data: Audio tensor (1D or 2D)
+        semitones: Number of semitones to shift (-12 to +12 recommended)
+                   Negative = lower pitch, Positive = higher pitch
+        sample_rate: Sample rate of audio
+
+    Returns:
+        Pitch-shifted audio tensor
+    """
+    if not TORCHAUDIO_AVAILABLE:
+        print("Warning: torchaudio not available. Skipping pitch shift.")
+        return audio_data
+
+    try:
+        if semitones == 0:
+            return audio_data
+
+        # Ensure audio is the right shape for torchaudio
+        if audio_data.dim() == 1:
+            audio_data = audio_data.unsqueeze(0)
+
+        # Use phase vocoder for pitch shifting
+        # Convert semitones to frequency ratio
+        pitch_shift_ratio = 2.0 ** (semitones / 12.0)
+
+        # Apply pitch shift using phase vocoder
+        shifted_audio = torchaudio.functional.pitch_shift(
+            audio_data,
+            sample_rate,
+            n_steps=semitones
+        )
+
+        # Remove batch dimension if input was 1D
+        if shifted_audio.shape[0] == 1:
+            shifted_audio = shifted_audio.squeeze(0)
+
+        print(f"Applied pitch shift: {semitones:+.1f} semitones")
+        return shifted_audio
+
+    except Exception as e:
+        print(f"Warning: Pitch shifting failed ({e}). Using original audio.")
+        return audio_data
+
+def lower_pitch_semitones(audio_data: torch.Tensor, semitones: int = -6, sample_rate: int = 24000) -> torch.Tensor:
+    """
+    Lower the pitch of audio by a specified number of semitones.
+
+    Args:
+        audio_data: Audio tensor
+        semitones: Number of semitones to lower (e.g., -6 = one octave lower, -12 = two octaves)
+        sample_rate: Sample rate
+
+    Returns:
+        Lower-pitched audio
+    """
+    return apply_pitch_shift(audio_data, semitones, sample_rate)
+
+def lower_pitch_percent(audio_data: torch.Tensor, percent_lower: float = 20, sample_rate: int = 24000) -> torch.Tensor:
+    """
+    Lower pitch by a percentage amount.
+
+    Args:
+        audio_data: Audio tensor
+        percent_lower: How much lower (0-100, typically 10-30 for subtle effect)
+        sample_rate: Sample rate
+
+    Returns:
+        Lower-pitched audio
+    """
+    # Convert percentage to semitones (roughly)
+    # 20% ≈ -4 to -5 semitones
+    semitones = -(percent_lower / 5)  # Approximate conversion
+    return apply_pitch_shift(audio_data, semitones, sample_rate)
+
 def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: float = 1.0,
                           use_blend: bool = False, custom_voices: Optional[List[str]] = None,
-                          custom_weights: Optional[List[float]] = None) -> Optional[PathLike]:
-    """Generate TTS audio with progress logging, memory management, and voice blending support.
+                          custom_weights: Optional[List[float]] = None, pitch_shift: int = 0) -> Optional[PathLike]:
+    """Generate TTS audio with progress logging, memory management, voice blending, and pitch control.
 
     Args:
         voice_selection: Name of the voice preset or single voice to use
@@ -327,6 +507,7 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
         use_blend: Whether to use voice blending
         custom_voices: List of voices for custom blending
         custom_weights: Weights for custom voice blending
+        pitch_shift: Pitch shift in semitones (-12 to +12, 0 = no shift)
 
     Returns:
         Path to generated audio file or None on error
@@ -466,6 +647,11 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
             except RuntimeError as e:
                 raise Exception(f"Failed to concatenate audio segments: {e}")
 
+        # Apply pitch shifting if requested
+        if pitch_shift != 0:
+            print(f"Applying pitch shift: {pitch_shift:+d} semitones")
+            final_audio = apply_pitch_shift(final_audio, pitch_shift, SAMPLE_RATE)
+
         # Save audio file
         try:
             sf.write(wav_path, final_audio.numpy(), SAMPLE_RATE)
@@ -550,8 +736,11 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 )
 
         # Voice Blending Options (Advanced)
-        with gr.Accordion("Advanced - Custom Voice Blending", open=False):
-            gr.Markdown("**Create custom voice blends by selecting multiple voices and adjusting their weights**")
+        with gr.Accordion("Advanced - Custom Voice Blending & Presets", open=False):
+            gr.Markdown("### Create & Manage Custom Voice Blends")
+
+            # Blending Parameters Section
+            gr.Markdown("#### 🎛️ Blend Parameters")
 
             with gr.Row():
                 voice1 = gr.Dropdown(
@@ -563,7 +752,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                     minimum=0,
                     maximum=100,
                     value=70,
-                    step=5,
+                    step=1,
                     label="Voice 1 Weight (%)"
                 )
 
@@ -577,7 +766,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                     minimum=0,
                     maximum=100,
                     value=30,
-                    step=5,
+                    step=1,
                     label="Voice 2 Weight (%)"
                 )
 
@@ -589,7 +778,53 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 )
                 use_custom_blend = gr.Checkbox(
                     value=False,
-                    label="Use Custom Blend"
+                    label="Use This Custom Blend"
+                )
+
+            # Blend Preview
+            blend_preview = gr.Markdown("**Blend Composition:** 70% Voice 1 + 30% Voice 2")
+
+            gr.Markdown("---")
+
+            # Save Custom Preset Section
+            gr.Markdown("#### 💾 Save As Preset")
+
+            with gr.Row():
+                custom_preset_name = gr.Textbox(
+                    placeholder="e.g., deep_narrator, warm_educator",
+                    label="Preset Name",
+                    info="Unique identifier (lowercase, no spaces)"
+                )
+                custom_preset_desc = gr.Textbox(
+                    placeholder="e.g., Deep and warm voice for documentaries",
+                    label="Description",
+                    info="Brief description of this blend"
+                )
+
+            with gr.Row():
+                save_blend_btn = gr.Button("💾 Save Blend As Preset", variant="primary")
+                blend_save_status = gr.Textbox(
+                    label="Status",
+                    interactive=False,
+                    value="Ready to save"
+                )
+
+            gr.Markdown("---")
+
+            # Manage Presets Section
+            gr.Markdown("#### 🗑️ Manage Saved Presets")
+
+            with gr.Row():
+                saved_blend_presets = gr.Dropdown(
+                    choices=preset_keys,
+                    label="Select Preset to Delete",
+                    info="(Built-in presets cannot be deleted)"
+                )
+                delete_blend_btn = gr.Button("🗑️ Delete Preset", variant="stop")
+                delete_status = gr.Textbox(
+                    label="Delete Status",
+                    interactive=False,
+                    value="Select a preset to delete"
                 )
 
         # Additional options
@@ -607,6 +842,16 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                         value=1.0,
                         step=0.1,
                         label="Speed"
+                    )
+
+                with gr.Row():
+                    pitch = gr.Slider(
+                        minimum=-12,
+                        maximum=12,
+                        value=0,
+                        step=1,
+                        label="Pitch Shift (semitones)",
+                        info="Negative = deeper, Positive = higher"
                     )
 
             with gr.Column(scale=1):
@@ -697,10 +942,58 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             else:
                 return gr.update(choices=preset_names)
 
+        # Function to update blend preview
+        def update_blend_preview(v1_choice, w1_val, v2_choice, w2_val):
+            """Update the blend preview text"""
+            total = w1_val + w2_val
+            if total == 0:
+                total = 100
+            w1_pct = (w1_val / total) * 100
+            w2_pct = (w2_val / total) * 100
+            return f"**Blend Composition:** {w1_pct:.0f}% {v1_choice} + {w2_pct:.0f}% {v2_choice}"
+
+        # Function to save a custom voice blend preset
+        def save_blend_preset_fn(preset_name, preset_desc, v1, w1, v2, w2):
+            """Save a custom voice blend as a preset"""
+            if not preset_name:
+                return "❌ Error: Preset name is required"
+
+            # Normalize name (lowercase, replace spaces with underscore)
+            clean_name = preset_name.lower().replace(" ", "_")
+
+            success, message = create_voice_blend_preset(
+                clean_name,
+                preset_desc or f"Custom blend of {v1} and {v2}",
+                [v1, v2],
+                [w1, w2],
+                blend_method="linear"
+            )
+
+            if success:
+                # Reload preset dropdown
+                updated_presets = load_voice_presets()
+                updated_keys = list(updated_presets.get("presets", {}).keys())
+                return f"✅ {message}"
+            else:
+                return f"❌ {message}"
+
+        # Function to delete a custom voice blend preset
+        def delete_blend_preset_fn(preset_to_delete):
+            """Delete a custom voice blend preset"""
+            if not preset_to_delete:
+                return "⚠️ Please select a preset to delete"
+
+            success, message = delete_voice_blend_preset(preset_to_delete)
+
+            if success:
+                return f"✅ {message}"
+            else:
+                return f"❌ {message}"
+
         # Function to generate speech with voice blending
-        def generate_with_blending(blend_preset_name, text, format, speed, use_custom,
+        def generate_with_blending(blend_preset_name, text, format, speed, pitch_shift, use_custom,
                                   v1, w1, v2, w2, blend_method):
-            """Generate speech using voice blend presets or custom blending"""
+            """Generate speech using voice blend presets or custom blending with pitch control"""
             if use_custom:
                 # Custom voice blending
                 custom_voices = [v1, v2]
@@ -712,7 +1005,8 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                     speed,
                     use_blend=True,
                     custom_voices=custom_voices,
-                    custom_weights=custom_weights
+                    custom_weights=custom_weights,
+                    pitch_shift=pitch_shift
                 )
             else:
                 # Use preset blending
@@ -721,7 +1015,8 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                     text,
                     format,
                     speed,
-                    use_blend=False
+                    use_blend=False,
+                    pitch_shift=pitch_shift
                 )
 
         # Connect the buttons to their functions
@@ -743,10 +1038,47 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             outputs=preset_dropdown
         )
 
-        # Connect the generate button with voice blending support
+        # Voice blend preset event handlers
+        # Update blend preview when weights/voices change
+        weight1.change(
+            fn=update_blend_preview,
+            inputs=[voice1, weight1, voice2, weight2],
+            outputs=blend_preview
+        )
+        weight2.change(
+            fn=update_blend_preview,
+            inputs=[voice1, weight1, voice2, weight2],
+            outputs=blend_preview
+        )
+        voice1.change(
+            fn=update_blend_preview,
+            inputs=[voice1, weight1, voice2, weight2],
+            outputs=blend_preview
+        )
+        voice2.change(
+            fn=update_blend_preview,
+            inputs=[voice1, weight1, voice2, weight2],
+            outputs=blend_preview
+        )
+
+        # Save custom voice blend preset
+        save_blend_btn.click(
+            fn=save_blend_preset_fn,
+            inputs=[custom_preset_name, custom_preset_desc, voice1, weight1, voice2, weight2],
+            outputs=blend_save_status
+        )
+
+        # Delete voice blend preset
+        delete_blend_btn.click(
+            fn=delete_blend_preset_fn,
+            inputs=saved_blend_presets,
+            outputs=delete_status
+        )
+
+        # Connect the generate button with voice blending and pitch control support
         generate.click(
             fn=generate_with_blending,
-            inputs=[blend_preset, text, format, speed, use_custom_blend,
+            inputs=[blend_preset, text, format, speed, pitch, use_custom_blend,
                    voice1, weight1, voice2, weight2, blend_method],
             outputs=output
         )
