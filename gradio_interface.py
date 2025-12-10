@@ -757,7 +757,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                     )
 
                 # Quick preview
-                quick_blend_preview = gr.Markdown("**70% Voice 1 + 30% Voice 2**", scale=1)
+                quick_blend_preview = gr.Markdown("**70% Voice 1 + 30% Voice 2**")
 
             with gr.Column(scale=1):
                 # Speed dial section
