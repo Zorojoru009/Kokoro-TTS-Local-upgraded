@@ -722,6 +722,43 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
                 )
                 blend_info = gr.Markdown("### Philosopher's Voice\nDeep, contemplative voice perfect for philosophical discourse")
 
+                # Quick blend adjusters - Voice 1
+                with gr.Row(scale=1):
+                    quick_voice1 = gr.Dropdown(
+                        choices=voices,
+                        value="am_adam",
+                        label="Voice 1",
+                        scale=2
+                    )
+                    quick_weight1 = gr.Slider(
+                        minimum=0,
+                        maximum=100,
+                        value=70,
+                        step=1,
+                        label="Weight",
+                        scale=1
+                    )
+
+                # Quick blend adjusters - Voice 2
+                with gr.Row(scale=1):
+                    quick_voice2 = gr.Dropdown(
+                        choices=voices,
+                        value="am_michael",
+                        label="Voice 2",
+                        scale=2
+                    )
+                    quick_weight2 = gr.Slider(
+                        minimum=0,
+                        maximum=100,
+                        value=30,
+                        step=1,
+                        label="Weight",
+                        scale=1
+                    )
+
+                # Quick preview
+                quick_blend_preview = gr.Markdown("**70% Voice 1 + 30% Voice 2**", scale=1)
+
             with gr.Column(scale=1):
                 # Speed dial section
                 preset_dropdown = gr.Dropdown(
@@ -1061,6 +1098,28 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
             outputs=blend_preview
         )
 
+        # Quick blend controls event handlers (main interface)
+        quick_weight1.change(
+            fn=update_blend_preview,
+            inputs=[quick_voice1, quick_weight1, quick_voice2, quick_weight2],
+            outputs=quick_blend_preview
+        )
+        quick_weight2.change(
+            fn=update_blend_preview,
+            inputs=[quick_voice1, quick_weight1, quick_voice2, quick_weight2],
+            outputs=quick_blend_preview
+        )
+        quick_voice1.change(
+            fn=update_blend_preview,
+            inputs=[quick_voice1, quick_weight1, quick_voice2, quick_weight2],
+            outputs=quick_blend_preview
+        )
+        quick_voice2.change(
+            fn=update_blend_preview,
+            inputs=[quick_voice1, quick_weight1, quick_voice2, quick_weight2],
+            outputs=quick_blend_preview
+        )
+
         # Save custom voice blend preset
         save_blend_btn.click(
             fn=save_blend_preset_fn,
@@ -1076,10 +1135,11 @@ def create_interface(server_name="127.0.0.1", server_port=7860):
         )
 
         # Connect the generate button with voice blending and pitch control support
+        # Use quick blend controls if they're different from defaults, otherwise use advanced controls
         generate.click(
             fn=generate_with_blending,
             inputs=[blend_preset, text, format, speed, pitch, use_custom_blend,
-                   voice1, weight1, voice2, weight2, blend_method],
+                   quick_voice1, quick_weight1, quick_voice2, quick_weight2, blend_method],
             outputs=output
         )
 
