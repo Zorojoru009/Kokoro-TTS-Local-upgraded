@@ -40,7 +40,7 @@ import speed_dial
 
 # Constants
 MAX_TEXT_LENGTH = 50000  # Increased from 5000 to support long texts with chunking
-CHUNK_SIZE = 2000  # Size of each text chunk for processing
+CHUNK_SIZE = 5000  # Size of each text chunk for processing (increased for faster generation)
 DEFAULT_SAMPLE_RATE = 24000
 MIN_SPEED = 0.1
 MAX_SPEED = 3.0
@@ -783,26 +783,61 @@ def generate_tts_with_logs(voice_selection: str, text: str, format: str, speed: 
         if not all_audio:
             raise Exception("No audio segments were generated")
 
+        print(f"\n{'='*60}")
+        print(f"📦 AUDIO CONCATENATION")
+        print(f"{'='*60}")
+        print(f"Total audio segments: {len(all_audio)}")
+
         # Handle single segment case without concatenation
         if len(all_audio) == 1:
             final_audio = all_audio[0]
+            print(f"Single segment audio shape: {final_audio.shape}")
         else:
             try:
+                # Debug each segment
+                for i, seg in enumerate(all_audio[:3]):  # Show first 3
+                    print(f"Segment {i}: shape={seg.shape}, dtype={seg.dtype}")
+                if len(all_audio) > 3:
+                    print(f"... and {len(all_audio) - 3} more segments")
+
                 final_audio = torch.cat(all_audio, dim=0)
+                print(f"✓ Concatenated audio shape: {final_audio.shape}")
             except RuntimeError as e:
                 raise Exception(f"Failed to concatenate audio segments: {e}")
 
+        # Validate audio before saving
+        if final_audio is None:
+            raise Exception("Final audio is None!")
+        if final_audio.numel() == 0:
+            raise Exception("Final audio is empty!")
+
+        print(f"Audio dtype: {final_audio.dtype}")
+        print(f"Audio length (samples): {final_audio.shape[0]:,}")
+        print(f"Duration: {final_audio.shape[0] / SAMPLE_RATE:.2f} seconds")
+
         # Save audio file
         try:
-            sf.write(wav_path, final_audio.numpy(), SAMPLE_RATE)
+            print(f"\n💾 Saving to: {wav_path}")
+            sf.write(wav_path, final_audio.cpu().numpy(), SAMPLE_RATE)
+            print(f"✓ Audio saved successfully!")
         except Exception as e:
             raise Exception(f"Failed to save audio file: {e}")
 
         # Convert to requested format if needed
         if format.lower() != "wav":
             output_path = DEFAULT_OUTPUT_DIR / f"{base_name}.{format.lower()}"
-            return convert_audio(wav_path, output_path, format.lower())
+            print(f"Converting to {format.upper()}...")
+            result = convert_audio(wav_path, output_path, format.lower())
+            print(f"{'='*60}")
+            print(f"✅ GENERATION COMPLETE!")
+            print(f"{'='*60}")
+            print(f"Output: {result}\n")
+            return result
 
+        print(f"{'='*60}")
+        print(f"✅ GENERATION COMPLETE!")
+        print(f"{'='*60}")
+        print(f"Output: {wav_path}\n")
         return wav_path
 
     except Exception as e:
